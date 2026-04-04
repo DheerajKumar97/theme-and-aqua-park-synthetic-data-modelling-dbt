@@ -1,0 +1,425 @@
+version: 2
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GOLD LAYER — Production-Grade Referential Integrity Validations
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Validation Categories Implemented:
+#   [1]  Foreign Key Consistency Check        → relationships tests on all FKs
+#   [2]  Surrogate Key Validation             → unique + not_null + UUID format
+#   [3]  Late Arriving Dimension Handling      → singular test (tests/gold/)
+#   [4]  Null Foreign Key Check               → not_null on mandatory FKs
+#   [5]  Duplicate Key Validation (Dims)      → unique + unique_combination_of_columns
+#   [6]  SCD Referential Integrity            → N/A (Type-1 only, no versioning)
+#   [7]  Cross-Domain Integrity Check         → dim-to-dim relationships + accepted_values
+#   [8]  Fact Grain Validation                → unique on fact PK + grain combo test
+#   [9]  Soft Delete / Inactive Dim Check     → singular test (tests/gold/)
+#   [10] Incremental Load Integrity           → enforced via INNER JOIN strategy
+#   [11] Data Type & Format Alignment         → accepted_range + expression_is_true
+#   [12] Audit & Reconciliation Check         → singular test (tests/gold/)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+models:
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # DIMENSIONS
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - name: dim_date
+    description: "Calendar dimension (2025–2026). date_key = INT YYYYMMDD."
+    tests:
+      # [5] Duplicate Key — composite uniqueness guard
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - date_key
+            - full_date
+      # [11] Format — date_iso must be MM/DD/YYYY
+      - dbt_utils.expression_is_true:
+          expression: "date_iso RLIKE '^[0-9]{2}/[0-9]{2}/[0-9]{4}$'"
+    columns:
+      - name: date_key
+        description: "PK — INT YYYYMMDD (e.g. 20260403)"
+        tests:
+          - unique                                    # [5] Duplicate Key
+          - not_null                                  # [2] SK Validation
+          - dbt_utils.accepted_range:                 # [11] Format — valid YYYYMMDD range
+              min_value: 20250101
+              max_value: 20261231
+      - name: full_date
+        tests:
+          - unique                                    # [5] Duplicate Key
+          - not_null
+      - name: date_iso
+        tests:
+          - unique
+          - not_null
+      - name: is_weekend
+        tests:
+          - not_null
+          - accepted_values:
+              values: [true, false]
+
+  - name: dim_park
+    description: "Park dimension — 2 rows (1=SF, 2=AQ)."
+    columns:
+      - name: park_key
+        description: "PK — INT (1=SF, 2=AQ)"
+        tests:
+          - unique                                    # [5]
+          - not_null                                  # [2]
+          - accepted_values:                          # [11] Format
+              values: [1, 2]
+      - name: park_code
+        tests:
+          - unique                                    # [5]
+          - not_null
+          - accepted_values:                          # [7] Cross-Domain
+              values: ['SF', 'AQ']
+
+  - name: dim_customer
+    description: "Customer dimension — one row per customer across both parks."
+    tests:
+      # [2][11] SK UUID format validation
+      - dbt_utils.expression_is_true:
+          expression: "customer_key RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+      # [8] At least one row exists
+      - dbt_utils.at_least_one:
+          column_name: customer_key
+    columns:
+      - name: customer_key
+        tests:
+          - unique                                    # [5]
+          - not_null                                  # [2]
+      - name: source_customer_id
+        tests:
+          - unique                                    # [5]
+          - not_null
+
+  - name: dim_product
+    description: "Product dimension — one row per product SKU."
+    tests:
+      - dbt_utils.expression_is_true:
+          expression: "product_key RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+      - dbt_utils.at_least_one:
+          column_name: product_key
+    columns:
+      - name: product_key
+        tests:
+          - unique                                    # [5]
+          - not_null                                  # [2]
+      - name: product_code
+        tests:
+          - unique                                    # [5]
+          - not_null
+      - name: list_price
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:                 # [11] Sanity check
+              min_value: 0
+              inclusive: true
+
+  - name: dim_staff
+    description: "Staff dimension — one row per employee."
+    tests:
+      - dbt_utils.expression_is_true:
+          expression: "staff_key RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+      - dbt_utils.at_least_one:
+          column_name: staff_key
+    columns:
+      - name: staff_key
+        tests:
+          - unique                                    # [5]
+          - not_null                                  # [2]
+      - name: source_employee_id
+        tests:
+          - unique                                    # [5]
+          - not_null
+      - name: staff_status
+        tests:
+          - accepted_values:                          # [7] Cross-Domain
+              values: ['ACTIVE', 'INACTIVE']
+
+  - name: dim_ride
+    description: "Ride dimension — one row per ride/attraction with park FK."
+    tests:
+      - dbt_utils.expression_is_true:
+          expression: "ride_key RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+    columns:
+      - name: ride_key
+        tests:
+          - unique                                    # [5]
+          - not_null                                  # [2]
+      - name: ride_code
+        tests:
+          - unique                                    # [5]
+          - not_null
+      - name: park_key
+        tests:
+          - not_null                                  # [4]
+          - relationships:                            # [7] Cross-Domain
+              to: ref('dim_park')
+              field: park_key
+
+  - name: dim_gate
+    description: "Gate dimension — one row per gate per park."
+    tests:
+      - dbt_utils.expression_is_true:
+          expression: "gate_key RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+      # [5] Composite business key uniqueness
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - gate_id
+            - park_key
+    columns:
+      - name: gate_key
+        tests:
+          - unique                                    # [5]
+          - not_null                                  # [2]
+      - name: gate_id
+        tests:
+          - not_null
+      - name: park_key
+        tests:
+          - not_null                                  # [4]
+          - relationships:                            # [7] Cross-Domain
+              to: ref('dim_park')
+              field: park_key
+
+  - name: dim_weather
+    description: "Weather condition dimension — one row per weather_code."
+    tests:
+      - dbt_utils.expression_is_true:
+          expression: "weather_key RLIKE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+    columns:
+      - name: weather_key
+        tests:
+          - unique                                    # [5]
+          - not_null                                  # [2]
+      - name: weather_code
+        tests:
+          - unique                                    # [5]
+          - not_null
+
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # FACT TABLES — Referential Integrity + Grain + Format Tests
+  # ═══════════════════════════════════════════════════════════════════════════
+
+  - name: fact_transaction
+    description: >
+      Transaction fact. Grain: one row per transaction.
+      INNER JOIN on date/park/product. LEFT JOIN on customer/staff.
+    tests:
+      # [8] Grain — no duplicate source transactions
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns:
+            - source_transaction_id
+    columns:
+      - name: transaction_key
+        tests:
+          - unique                                    # [8] Grain
+          - not_null                                  # [2]
+      - name: date_key
+        description: "FK → dim_date (NOT NULL — INNER JOIN)"
+        tests:
+          - not_null                                  # [4] Null FK Check
+          - relationships:                            # [1] FK Consistency
+              to: ref('dim_date')
+              field: date_key
+          - dbt_utils.accepted_range:                 # [11] Format
+              min_value: 20250101
+              max_value: 20261231
+      - name: park_key
+        description: "FK → dim_park (NOT NULL — INNER JOIN)"
+        tests:
+          - not_null                                  # [4]
+          - relationships:                            # [1]
+              to: ref('dim_park')
+              field: park_key
+      - name: product_key
+        description: "FK → dim_product (NOT NULL — INNER JOIN)"
+        tests:
+          - not_null                                  # [4]
+          - relationships:                            # [1]
+              to: ref('dim_product')
+              field: product_key
+      - name: customer_key
+        description: "FK → dim_customer (NULLABLE — LEFT JOIN)"
+        tests:
+          - relationships:                            # [1]
+              to: ref('dim_customer')
+              field: customer_key
+      - name: staff_key
+        description: "FK → dim_staff (NULLABLE — LEFT JOIN)"
+        tests:
+          - relationships:                            # [1]
+              to: ref('dim_staff')
+              field: staff_key
+      - name: quantity
+        tests:
+          - not_null
+      - name: total_charged
+        tests:
+          - not_null
+
+  - name: fact_gate_event
+    description: >
+      Gate event fact. Grain: one row per gate scan.
+      INNER JOIN on date/park/gate. LEFT JOIN on customer.
+    tests:
+      - dbt_utils.unique_combination_of_columns:     # [8] Grain
+          combination_of_columns:
+            - source_event_id
+    columns:
+      - name: gate_event_key
+        tests:
+          - unique                                    # [8]
+          - not_null                                  # [2]
+      - name: date_key
+        tests:
+          - not_null                                  # [4]
+          - relationships:                            # [1]
+              to: ref('dim_date')
+              field: date_key
+      - name: park_key
+        tests:
+          - not_null                                  # [4]
+          - relationships:                            # [1]
+              to: ref('dim_park')
+              field: park_key
+      - name: gate_key
+        description: "FK → dim_gate (NOT NULL — INNER JOIN)"
+        tests:
+          - not_null                                  # [4]
+          - relationships:                            # [1]
+              to: ref('dim_gate')
+              field: gate_key
+      - name: customer_key
+        description: "FK → dim_customer (NULLABLE — LEFT JOIN)"
+        tests:
+          - relationships:                            # [1]
+              to: ref('dim_customer')
+              field: customer_key
+      - name: event_count
+        tests:
+          - not_null
+          - accepted_values:                          # [11]
+              values: [1]
+
+  - name: fact_ride_operations
+    description: >
+      Ride operations fact. Grain: one row per ride poll.
+      INNER JOIN on date/park/ride. LEFT JOIN on staff.
+    tests:
+      - dbt_utils.unique_combination_of_columns:     # [8] Grain
+          combination_of_columns:
+            - source_record_id
+    columns:
+      - name: ride_ops_key
+        tests:
+          - unique                                    # [8]
+          - not_null                                  # [2]
+      - name: date_key
+        tests:
+          - not_null                                  # [4]
+          - relationships:                            # [1]
+              to: ref('dim_date')
+              field: date_key
+      - name: park_key
+        tests:
+          - not_null                                  # [4]
+          - relationships:                            # [1]
+              to: ref('dim_park')
+              field: park_key
+      - name: ride_key
+        description: "FK → dim_ride (NOT NULL — INNER JOIN)"
+        tests:
+          - not_null                                  # [4]
+          - relationships:                            # [1]
+              to: ref('dim_ride')
+              field: ride_key
+      - name: staff_key
+        description: "FK → dim_staff (NULLABLE — LEFT JOIN)"
+        tests:
+          - relationships:                            # [1]
+              to: ref('dim_staff')
+              field: staff_key
+      - name: operational_status
+        tests:
+          - not_null
+
+  - name: fact_customer_feedback
+    description: >
+      Feedback fact. Grain: one row per feedback submission.
+      INNER JOIN on park. LEFT JOIN on date + customer.
+    columns:
+      - name: feedback_key
+        tests:
+          - unique                                    # [8]
+          - not_null                                  # [2]
+      - name: park_key
+        description: "FK → dim_park (NOT NULL — INNER JOIN)"
+        tests:
+          - not_null                                  # [4]
+          - relationships:                            # [1]
+              to: ref('dim_park')
+              field: park_key
+      - name: date_key
+        description: "FK → dim_date (NULLABLE — bad/missing date)"
+        tests:
+          - relationships:                            # [1]
+              to: ref('dim_date')
+              field: date_key
+      - name: customer_key
+        description: "FK → dim_customer (NULLABLE — anonymous)"
+        tests:
+          - relationships:                            # [1]
+              to: ref('dim_customer')
+              field: customer_key
+      - name: overall_score
+        tests:
+          - dbt_utils.accepted_range:                 # [11]
+              min_value: 0
+              max_value: 10
+              inclusive: true
+      - name: nps_raw
+        tests:
+          - dbt_utils.accepted_range:                 # [11]
+              min_value: 0
+              max_value: 10
+              inclusive: true
+
+  - name: fact_weather_observation
+    description: >
+      Weather observation fact. Grain: one row per weather poll.
+      ALL INNER JOINs — strictest RI.
+    columns:
+      - name: weather_obs_key
+        tests:
+          - unique                                    # [8]
+          - not_null                                  # [2]
+      - name: date_key
+        tests:
+          - not_null                                  # [4]
+          - relationships:                            # [1]
+              to: ref('dim_date')
+              field: date_key
+      - name: park_key
+        tests:
+          - not_null                                  # [4]
+          - relationships:                            # [1]
+              to: ref('dim_park')
+              field: park_key
+      - name: weather_key
+        description: "FK → dim_weather (NOT NULL — INNER JOIN)"
+        tests:
+          - not_null                                  # [4]
+          - relationships:                            # [1]
+              to: ref('dim_weather')
+              field: weather_key
+      - name: temperature_c
+        tests:
+          - dbt_utils.accepted_range:                 # [11] Sanity
+              min_value: -20
+              max_value: 65
+              inclusive: true

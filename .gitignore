@@ -78,6 +78,10 @@ docs/_build/
 .pybuilder/
 target/
 
+#databricks token 
+databricks_access_token.txt
+profiles.yml
+
 # Jupyter Notebook
 .ipynb_checkpoints
 
