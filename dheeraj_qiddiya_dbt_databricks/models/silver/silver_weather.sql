@@ -41,6 +41,15 @@ cast_and_clean AS (
 
     SELECT
 
+        -- Surrogate Key
+        REGEXP_REPLACE(
+            {{ dbt_utils.generate_surrogate_key(
+                ['park_code', 'poll_datetime']
+            ) }},
+            '^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$',
+            '$1-$2-$3-$4-$5'
+        ) AS weather_sk,
+
         -- Location
         park_code,
 
@@ -84,7 +93,7 @@ cast_and_clean AS (
             WHEN LOWER(TRIM(is_duplicate)) IN ('true','yes','1') THEN TRUE
             WHEN LOWER(TRIM(is_duplicate)) IN ('false','no','0') THEN FALSE
             ELSE NULL
-        END                                                  AS is_duplicate,
+        END                                                   AS is_duplicate,
 
         source_region
 
@@ -96,14 +105,8 @@ silver_weather AS (
 
     SELECT
 
-        {# -- Surrogate Key
-        REGEXP_REPLACE(
-            {{ dbt_utils.generate_surrogate_key(
-                ['park_code','weather_timestamp']
-            ) }},
-            '^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$',
-            '$1-$2-$3-$4-$5'
-        ) AS weather_sk, #}
+        -- Surrogate Key
+        weather_sk,
 
         -- Dimensions
         park_code,
@@ -127,26 +130,26 @@ silver_weather AS (
         weather_code,
         weather_description,
 
-        -- Derived Metrics (🔥 strong point)
-        (temperature_max_c - temperature_min_c)              AS temperature_range,
+        -- Derived Metrics
+        (temperature_max_c - temperature_min_c)               AS temperature_range,
 
         CASE
             WHEN temperature_c >= 40 THEN 'EXTREME_HEAT'
             WHEN temperature_c >= 30 THEN 'HOT'
             WHEN temperature_c >= 20 THEN 'WARM'
             ELSE 'COOL'
-        END                                                  AS temperature_category,
+        END                                                   AS temperature_category,
 
         CASE
             WHEN rainfall_1h_mm > 0 THEN TRUE
             ELSE FALSE
-        END                                                  AS is_raining,
+        END                                                   AS is_raining,
 
         CASE
             WHEN air_quality_index <= 2 THEN 'GOOD'
             WHEN air_quality_index <= 4 THEN 'MODERATE'
             ELSE 'POOR'
-        END                                                  AS air_quality_status,
+        END                                                   AS air_quality_status,
 
         -- API Info
         http_status_code,
@@ -162,7 +165,7 @@ silver_weather AS (
         source_region,
 
         -- Audit
-        CURRENT_TIMESTAMP()                                 AS silver_loaded_at
+        CURRENT_TIMESTAMP()                                   AS silver_loaded_at
 
     FROM cast_and_clean
 
