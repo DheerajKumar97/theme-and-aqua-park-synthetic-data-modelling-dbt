@@ -6,18 +6,31 @@
     )
 }}
 
-{#
-    fact_weather_observation — Weather telemetry fact table
-
-    Grain: one row per weather poll record (hourly).
-
-    FK Join Strategy (100% RI):
-        INNER JOIN → date_key, park_key, weather_key  (all NOT NULL — orphan guard)
-#}
-
 WITH silver_wx AS (
 
-    SELECT *
+    -- Resolve all columns cleanly before joining,
+    -- so surrogate key macro never needs table aliases
+    SELECT
+        weather_sk,
+        park_code,
+        weather_date,
+        weather_timestamp,
+        weather_code,
+        temperature_c,
+        feels_like_c,
+        temperature_min_c,
+        temperature_max_c,
+        temperature_range,
+        humidity_pct,
+        wind_speed_ms,
+        wind_direction_deg,
+        uv_index,
+        visibility_m,
+        rainfall_1h_mm,
+        air_quality_index,
+        temperature_category,
+        is_raining,
+        air_quality_status
     FROM {{ ref('silver_weather') }}
     WHERE weather_date IS NOT NULL
       AND weather_code IS NOT NULL
@@ -28,24 +41,12 @@ fact_weather_observation AS (
 
     SELECT
 
-        -- Fact Surrogate Key
-        REGEXP_REPLACE(
-            {{ dbt_utils.generate_surrogate_key(
-                ['w.park_code', 'w.weather_timestamp']
-            ) }},
-            '^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$',
-            '$1-$2-$3-$4-$5'
-        )                                                        AS weather_obs_key,
+        -- Fact Surrogate Key (reuse silver SK — same grain)
+        w.weather_sk                                             AS weather_obs_key,
 
         -- ═══ Dimension FKs ═══
-
-        -- Date (INNER — mandatory)
         d.date_key,
-
-        -- Park (INNER — mandatory)
         p.park_key,
-
-        -- Weather Condition (INNER — mandatory)
         wd.weather_key,
 
         -- ═══ Timestamp ═══
@@ -67,7 +68,7 @@ fact_weather_observation AS (
         w.rainfall_1h_mm,
         w.air_quality_index,
 
-        -- ═══ Derived Attributes (from silver) ═══
+        -- ═══ Derived Attributes ═══
         w.temperature_category,
         w.is_raining,
         w.air_quality_status,
@@ -77,7 +78,6 @@ fact_weather_observation AS (
 
     FROM silver_wx w
 
-    -- ── ALL NOT NULL FKs → INNER JOIN (orphan protection) ────────────────
     INNER JOIN {{ ref('dim_date') }} d
         ON d.full_date = w.weather_date
 
